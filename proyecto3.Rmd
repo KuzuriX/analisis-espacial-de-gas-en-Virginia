@@ -1,0 +1,397 @@
+---
+title: "Protecto 3 - Geoestadistica"
+author: "Miguel Coto y Esteban Vargas"
+output:
+  html_document:
+    df_print: paged
+---
+
+Bibliotecas
+```{r warning=FALSE}
+require(lattice)
+library(sp)
+require(gstat)
+library(sf)
+library(ggmap)
+
+```
+
+
+Leyendo datos
+```{r warning=FALSE}
+#setwd("C:/Users/Esteban Vargas P/Desktop/Esteban/UCR/Estadística/Posgrado/5-ESTADISTICA ESPACIAL/PROYECTO 2 GEOESTADISTICA")
+setwd("~/OneDrive/Documentos/Maestria Estad/Espacial/proyecto3")
+
+appa <- readxl::read_excel("appa.xlsx", col_types = c("numeric", "numeric", "numeric"))
+#head(appa)
+
+appa$x <- appa$x*1000
+appa$y <- appa$y*1000
+
+#appa_m <- appa
+#coordinates(appa_m) <- c("x", "y")
+
+appa <- SpatialPointsDataFrame(appa[,1:2], appa[,3], proj4string=CRS("+proj=utm +zone=17 +datum=WGS84"))
+#appa <- spTransform(sputm, CRS("+proj=longlat +datum=WGS84"))
+
+summary(appa)
+
+```
+
+## Analisis exploratorio
+
+###Distribucion de la variable gas
+```{r}
+hist(appa$pot, breaks = 20, xlab="Campo de gas de West Virginia", main="Histograma de gas por mil pies cúbicos por día")
+appa$pot1 <- log(appa$pot)
+hist(appa$pot1, breaks = 20, xlab="Campo de gas de West Virginia", main="Histograma de log gas por mil pies cúbicos por día")
+```
+
+### Distribución espacial del gas
+```{r}
+
+scale = list("SpatialPolygonsRescale", layout.scale.bar(), 
+    offset = c(535000,4342000), scale = 10000, fill=c("transparent","black"))
+text1 = list("sp.text", c(535000,4344000), "0")
+text2 = list("sp.text", c(545000,4344000), "10000 m")
+arrow = list("SpatialPolygonsRescale", layout.north.arrow(), 
+    offset = c(540000,4345000), scale = 5000)
+
+spplot(appa, "pot", do.log=T,
+    key.space=list(x=0.15,y=0.93,corner=c(0,1)),
+    sp.layout=list(scale,text1,text2,arrow),
+    main = "Campo de gas de West Virginia\n(mil pies cúbicos por día)", 
+    sub = "Geostatistics and Petroleum Geology by M.E. Hohn", 
+    col = "transparent")
+
+```
+
+```{r}
+
+scale = list("SpatialPolygonsRescale", layout.scale.bar(), 
+    offset = c(535000,4342000), scale = 10000, fill=c("transparent","black"))
+text1 = list("sp.text", c(535000,4344000), "0")
+text2 = list("sp.text", c(545000,4344000), "10000 m")
+arrow = list("SpatialPolygonsRescale", layout.north.arrow(), 
+    offset = c(540000,4345000), scale = 5000)
+
+spplot(appa, "pot", do.log = TRUE,
+    key.space=list(x=0.15,y=0.93,corner=c(0,1)),
+    sp.layout=list(scale,text1,text2,arrow),
+    scales=list(draw = TRUE), cuts = 3,
+    legendEntries = c("bajo", "intermedio", "alto"),
+    main = "Campo de gas de West Virginia\n(mil pies cúbicos por día)", 
+    sub = "Geostatistics and Petroleum Geology by M.E. Hohn", 
+    col = "transparent")
+
+```
+
+
+```{r warning=FALSE}
+
+merc = CRS("+init=epsg:3857")
+WGS84 = CRS("+init=epsg:4326")
+appa.ll = spTransform(appa, WGS84)
+bgMap = get_map(as.vector(bbox(appa.ll)), source = "google", zoom = 13) # useless without zoom level
+
+
+par(mar = rep(0,4))
+plot(spTransform(appa, merc), bgMap = bgMap, pch = 16, cex = .5,
+      main = "Campo de gas de West Virginia", 
+    sub = "Geostatistics and Petroleum Geology by M.E. Hohn"
+    )
+```
+
+```{r warning=FALSE}
+spplot(spTransform(appa, merc), c("pot"), colorkey = TRUE,
+    sp.layout = list(panel.ggmap, bgMap, first = TRUE))
+
+```
+
+### Regresion lineal
+
+```{r}
+
+zn.lm <- lm(pot1~1, appa)
+appa$fitted.s <- predict(zn.lm, appa) - mean(predict(zn.lm, appa))
+appa$residuals <- residuals(zn.lm)
+print(spplot(appa, c("fitted.s", "residuals"), col.regions =
+              , cuts = 8, colorkey=TRUE), split = c(1,1,1,1))
+
+```
+
+### gráficos de dispersión de los pares de observaciones
+```{r}
+hscat(log(pot)~1,data=appa,breaks=(0:9)*1500, pch=1, cex=.3, col = 'gray')
+
+```
+
+### Variograma en nube y puntos
+
+```{r}
+cld <- variogram(log(pot) ~ 1, appa, cloud = TRUE)
+svgm <- variogram(log(pot) ~ 1, appa)
+
+## ~1 quiere decir media constante
+d <- data.frame(gamma = c(cld$gamma, svgm$gamma),
+  dist = c(cld$dist, svgm$dist),
+  id = c(rep("cloud", nrow(cld)), rep("sample variogram", nrow(svgm)))
+)
+
+xyplot(gamma ~ dist | id, d,
+    scales = list(y = list(relation = "free", 
+    #ylim = list(NULL, c(-.005,0.7)))),
+    limits = list(NULL, c(-.005,0.9)))),
+    layout = c(1, 2), as.table = TRUE,
+    panel = function(x,y, ...) {
+        if (panel.number() == 2)
+            ltext(x+10, y, svgm$np, adj = c(0,0.5)) #$
+        panel.xyplot(x,y,...)
+    },
+    xlim = c(0, 15000),
+    cex = .5, pch = 3
+)
+```
+
+### prueba para constatar que la señal no es “ruido”
+
+```{r}
+v <- variogram(log(pot) ~ 1, appa)
+print(xyplot(gamma ~ dist, v, pch = 3, type = 'b', lwd = 2, col = 'darkblue',
+    panel = function(x, y, ...) {
+        for (i in 1:100) {
+            appa$random = sample(appa$pot)
+            v = variogram(log(random) ~ 1, appa)
+            llines(v$dist, v$gamma, col = 'grey')
+        }
+        panel.xyplot(x, y, ...)
+    },
+    ylim = c(0, 0.9), xlab = 'distance', ylab = 'semivariance'
+))
+```
+
+Dado que la muestra es pequenna no se pueden sacar muchas conclusiones.
+
+## Decisiones para el ajuste de un semivariograma:
+
+```{r}
+plot(variogram(log(pot) ~ 1, appa))
+
+```
+
+```{r}
+
+plot(variogram(pot1~1, appa, alpha = c(0, 45, 90, 135)))
+plot(variogram(pot1~1, appa, alpha = c(0, 180, 90, 270)))
+```
+
+```{r}
+plot(variogram(log(pot) ~ 1, appa, cutoff = 15000, width = 1500))
+
+```
+
+## Modelaje de los semivariogramas
+
+Escoja un modelo adecuado con o sin Nugget.
+Elija valores iniciales para cada parámetro.
+Ajuste el modelo utilizando un estadístico de ajuste.
+
+### Ajustando valors para el metodo esferico
+```{r}
+v <- variogram(log(pot) ~ 1, appa)
+v.fit <- fit.variogram(v, vgm( "Sph"))
+ccol = 'darkblue' #grey(.5)
+plot(v, v.fit, pch = 3, panel = function(x,y,subscripts,...) {
+        larrows(0,v.fit$psill[1], v.fit$range[2], v.fit$psill[1], 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        larrows(v.fit$range[2],0, v.fit$range[2], v.fit$psill[1], 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        larrows(v.fit$range[2],v.fit$psill[1], v.fit$range[2], 
+            sum(v.fit$psill), 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        ltext(v.fit$rang[2]/2, 1.2*v.fit$psill[1], "range", col=ccol,
+            adj = c(.5, 0), cex=.9)
+        ltext(1.02 * v.fit$rang[2], 0.5 *v.fit$psill[1], "nugget", col=ccol,
+            adj = c(0, 0.5), cex=.9)
+        ltext(1.02 * v.fit$rang[2], v.fit$psill[1] + 0.5 * v.fit$psill[2], 
+            "partial sill", col=ccol, adj = c(0, 0.5), cex=.9)
+        vgm.panel.xyplot(x,y,subscripts,...)
+    }
+)
+```
+
+
+### Ajustando valors para el metodo Matern
+```{r}
+v <- variogram(log(pot) ~ 1, appa)
+v.fit <- fit.variogram(v, vgm( "Mat"))
+ccol = 'darkblue' #grey(.5)
+plot(v, v.fit, pch = 3, panel = function(x,y,subscripts,...) {
+        larrows(0,v.fit$psill[1], v.fit$range[2], v.fit$psill[1], 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        larrows(v.fit$range[2],0, v.fit$range[2], v.fit$psill[1], 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        larrows(v.fit$range[2],v.fit$psill[1], v.fit$range[2], 
+            sum(v.fit$psill), 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        ltext(v.fit$rang[2]/2, 1.2*v.fit$psill[1], "range", col=ccol,
+            adj = c(.5, 0), cex=.9)
+        ltext(1.02 * v.fit$rang[2], 0.5 *v.fit$psill[1], "nugget", col=ccol,
+            adj = c(0, 0.5), cex=.9)
+        ltext(1.02 * v.fit$rang[2], v.fit$psill[1] + 0.5 * v.fit$psill[2], 
+            "partial sill", col=ccol, adj = c(0, 0.5), cex=.9)
+        vgm.panel.xyplot(x,y,subscripts,...)
+    }
+)
+```
+
+
+### Ajustando valors para el metodo exponencial
+```{r}
+v <- variogram(log(pot) ~ 1, appa)
+v.fit <- fit.variogram(v, vgm( "Exp"))
+ccol = 'darkblue' #grey(.5)
+plot(v, v.fit, pch = 3, panel = function(x,y,subscripts,...) {
+        larrows(0,v.fit$psill[1], v.fit$range[2], v.fit$psill[1], 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        larrows(v.fit$range[2],0, v.fit$range[2], v.fit$psill[1], 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        larrows(v.fit$range[2],v.fit$psill[1], v.fit$range[2], 
+            sum(v.fit$psill), 
+            col=ccol, ends = 'both', length=.1, angle=15)
+        ltext(v.fit$rang[2]/2, 1.2*v.fit$psill[1], "range", col=ccol,
+            adj = c(.5, 0), cex=.9)
+        ltext(1.02 * v.fit$rang[2], 0.5 *v.fit$psill[1], "nugget", col=ccol,
+            adj = c(0, 0.5), cex=.9)
+        ltext(1.02 * v.fit$rang[2], v.fit$psill[1] + 0.5 * v.fit$psill[2], 
+            "partial sill", col=ccol, adj = c(0, 0.5), cex=.9)
+        vgm.panel.xyplot(x,y,subscripts,...)
+    }
+)
+```
+
+El mejor ajuste es el esferico. 
+
+### Ajustando anisotropia
+
+```{r}
+v.dir <- variogram(log(pot)~1,appa,alpha=(0:3)*45)
+v.anis <- vgm(.4, "Sph", 4700, .22, anis=c(45,.3))
+print(plot(v.dir, v.anis, pch=3))
+
+```
+
+
+```{r}
+plot(variogram(log(pot)~1,appa, map=TRUE, cutoff=10000, width=1000))
+
+```
+
+### Variograma final
+
+```{r}
+vgm1 = variogram(log(pot)~1, appa)
+# plot variogram cloud
+plot(variogram(log(pot)~1, appa, cloud=TRUE))
+plot(vgm1,plot.numbers=T)     
+
+
+
+vgm1.fit = fit.variogram(vgm1, model = vgm(.4, "Sph", 4700, .22))
+vgm1.fit
+plot(vgm1, vgm1.fit,plot.numbers=T)
+
+```
+
+```{r}
+vmf<-fit.variogram(vgm1,vgm1.fit)
+print(plot(vgm1,pl=T,model=vmf))
+vmf
+
+```
+
+## Predicción o Kriging Univariado
+
+```{r}
+#sph model
+# vm<-vgm(model="Sph", range=5.1, nugget=0.2)
+# print(plot(vgm1,pl=T,model=vm))
+# vmf<-fit.variogram(vgm1,vm)
+# print(plot(vgm1,pl=T,model=vmf))
+# vmf
+x1<-min(appa$x)
+x2<-max(appa$x)
+y1<-min(appa$y)
+y2<-max(appa$y)
+r=1
+mat<-matrix(0,nrow=(length(seq(x1,x2,by=100)))*(length(seq(y1,y2,by=100))),ncol=2)
+for (i in seq(x1,x2,by=100)){
+    for (j in seq(y1,y2,by=100)){
+        mat[r,1]<-i
+        mat[r,2]<-j
+        r=r+1
+    }
+}
+
+#save(mat, file="appagrid.Rdata")
+#load("appagrid.Rdata")
+
+data.grid <- mat
+rm(mat)
+#write.csv(mat,file="appagrid.csv")
+#data.grid<-read.csv("appagrid.csv")
+
+colnames(data.grid)<-c("x","y")
+data.grid <- as.data.frame(data.grid)
+coordinates(data.grid) <- c("x", "y")
+
+#appa <- SpatialPointsDataFrame(appa[,1:2], appa[,3], proj4string=CRS("+proj=utm +zone=17 +datum=WGS84"))
+
+data.grid <- SpatialPixels(data.grid, proj4string=CRS("+proj=utm +zone=17 +datum=WGS84"))
+#data.grid <- spTransform(data.grid, CRS("+proj=utm +zone=17 +datum=WGS84"))
+
+```
+
+```{r}
+#gridded(data.grid)<-T
+
+k<-krige(log(pot)~1,locations=appa,newdata=data.grid,model=vmf)
+
+save(k,file="Final_sph.Rdata")
+
+#display maps of concentrations
+spplot(k,"var1.pred",asp=1,col.regions=bpy.colors(64),xlim=c(x1,x2),ylim=c(y1,y2),main="Ordinary Kriging Prediction by Sph Model,\nlog-West Virginia Gas Field")
+
+summary(k$var1.pred)
+
+spplot(k,"var1.var",asp=1,col.regions=bpy.colors(64),xlim=c(x1,x2),ylim=c(y1,y2),main="Ordinary Kriging Prediction Variance by Sph Model,\nlog-West Virginia Gas Field")
+
+```
+
+
+
+
+
+
+
+
+### Eliminando valores extremos
+
+```{r}
+appa2 <- appa[-c(3,14),]
+
+scale = list("SpatialPolygonsRescale", layout.scale.bar(), 
+    offset = c(535000,4342000), scale = 10000, fill=c("transparent","black"))
+text1 = list("sp.text", c(535000,4344000), "0")
+text2 = list("sp.text", c(545000,4344000), "10000 m")
+arrow = list("SpatialPolygonsRescale", layout.north.arrow(), 
+    offset = c(540000,4345000), scale = 5000)
+
+spplot(appa2, "pot", do.log=T,
+    key.space=list(x=0.15,y=0.93,corner=c(0,1)),
+    sp.layout=list(scale,text1,text2,arrow),
+    main = "Campo de gas de West Virginia\n(mil pies cúbicos por día)", 
+    sub = "Geostatistics and Petroleum Geology by M.E. Hohn", 
+    col = "transparent")
+
+```
